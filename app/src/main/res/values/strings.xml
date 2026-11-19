@@ -1,0 +1,107 @@
+<resources>
+    <string name="app_name">SonicBloom</string>
+    <string name="app_tagline">Studio MP3 &amp; Lossless Player</string>
+
+    <string name="nav_home">Home</string>
+    <string name="nav_tracks">Tracks</string>
+    <string name="nav_browse">Browse</string>
+    <string name="nav_playlists">Playlists</string>
+
+    <string name="action_grant_audio_access">Scan Device Audio</string>
+    <string name="action_open_app_settings">App Settings</string>
+    <string name="action_import_audio_files">Import MP3s</string>
+    <string name="action_shuffle_all">Shuffle</string>
+    <string name="action_play_all">Play All</string>
+    <string name="action_equalizer">Equalizer</string>
+    <string name="action_sleep_timer">Sleep Timer</string>
+    <string name="action_rescan_library">Rescan</string>
+    <string name="action_create_playlist">New Playlist</string>
+    <string name="action_add_tracks">Add Tracks</string>
+    <string name="action_save">Save</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_rename">Rename</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_dismiss">Dismiss</string>
+    <string name="action_clear_filters">Clear Filters</string>
+    <string name="action_clear_queue">Clear Queue</string>
+    <string name="action_play_next">Play Next</string>
+    <string name="action_add_to_queue">Add to Queue</string>
+    <string name="action_add_to_playlist">Add to Playlist</string>
+    <string name="action_remove_from_playlist">Remove from Playlist</string>
+    <string name="action_track_info">Audio Details</string>
+
+    <string name="home_hero_eyebrow">STUDIO AUDIO ENGINE</string>
+    <string name="home_hero_title">Your local library, in full bloom.</string>
+    <string name="home_recently_played">Recently Played</string>
+    <string name="home_favorites_mix">Favorites Mix</string>
+    <string name="home_folders_overview">Audio Folders</string>
+    <string name="home_library_stats">%1$d tracks • %2$d albums</string>
+
+    <string name="empty_library_title">No audio tracks found yet</string>
+    <string name="empty_library_subtitle">Scan device storage for MP3, FLAC, and M4A files or pick audio files directly.</string>
+    <string name="empty_search_title">No matching tracks</string>
+    <string name="empty_search_subtitle">Adjust your search query or active filters to see more tracks.</string>
+    <string name="empty_playlists_title">No custom playlists yet</string>
+    <string name="empty_playlists_subtitle">Create a playlist to curate your favorite MP3s and mixes.</string>
+    <string name="empty_queue_title">Queue is empty</string>
+    <string name="empty_queue_subtitle">Tap any track in your library to start listening.</string>
+
+    <string name="search_tracks_hint">Search songs, artists, albums…</string>
+    <string name="search_browse_hint">Filter albums, artists, folders…</string>
+
+    <string name="filter_all">All</string>
+    <string name="filter_favorites">Liked</string>
+    <string name="filter_mp3">MP3</string>
+    <string name="filter_lossless">Lossless</string>
+    <string name="filter_imported">Imported</string>
+
+    <string name="sort_by_title">Title</string>
+    <string name="sort_by_artist">Artist</string>
+    <string name="sort_by_duration">Duration</string>
+    <string name="sort_by_recent">Date Added</string>
+    <string name="sort_by_plays">Most Played</string>
+
+    <string name="browse_tab_albums">Albums</string>
+    <string name="browse_tab_artists">Artists</string>
+    <string name="browse_tab_folders">Folders</string>
+
+    <string name="playlist_liked_songs">Liked Songs</string>
+    <string name="playlist_most_played">Most Played</string>
+    <string name="playlist_recently_added">Recently Added</string>
+    <string name="playlist_name_hint">Playlist name</string>
+    <string name="playlist_track_count">%1$d tracks</string>
+
+    <string name="now_playing_label">NOW PLAYING</string>
+    <string name="up_next_label">Up Next</string>
+    <string name="equalizer_title">Studio Equalizer</string>
+    <string name="equalizer_bass_boost">Bass Boost</string>
+    <string name="equalizer_unavailable">Hardware equalizer bands become available once an audio track begins playing on this device.</string>
+    <string name="sleep_timer_title">Sleep Timer</string>
+    <string name="sleep_timer_off">Turn Off Timer</string>
+    <string name="sleep_timer_end_of_track">End of current track</string>
+    <string name="sleep_timer_minutes">%1$d min</string>
+
+    <string name="settings_title">Studio &amp; Appearance</string>
+    <string name="theme_mode_label">Appearance</string>
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+
+    <string name="cd_play_pause">Play or pause</string>
+    <string name="cd_previous_track">Previous track</string>
+    <string name="cd_next_track">Next track</string>
+    <string name="cd_rewind_10">Rewind 10 seconds</string>
+    <string name="cd_forward_10">Forward 10 seconds</string>
+    <string name="cd_shuffle">Toggle shuffle</string>
+    <string name="cd_repeat">Cycle repeat mode</string>
+    <string name="cd_favorite">Toggle favorite</string>
+    <string name="cd_album_art">Album artwork</string>
+    <string name="cd_back">Navigate back</string>
+    <string name="cd_more_options">More track options</string>
+    <string name="cd_queue">Open playback queue</string>
+    <string name="cd_equalizer">Open equalizer</string>
+    <string name="cd_sleep_timer">Open sleep timer</string>
+    <string name="cd_theme_toggle">Switch theme appearance</string>
+    <string name="cd_studio_settings">Open studio settings</string>
+</resources>

@@ -1,0 +1,6 @@
+{
+  "name": "SonicBloom",
+  "description": "SonicBloom Music Player & MP3 Player with local audio scanning, Media3 background playback, 5-band equalizer, custom playlists, and sleep timer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
