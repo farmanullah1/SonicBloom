@@ -9,8 +9,14 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -116,10 +122,15 @@ fun SonicBloomApp(
     val context = LocalContext.current
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
+    val systemDark = isSystemInDarkTheme()
 
     val libraryState by viewModel.libraryState.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
     val equalizerState by viewModel.equalizerState.collectAsStateWithLifecycle()
+    val dynamicColors by viewModel.dynamicColors.collectAsStateWithLifecycle()
+    val currentTrackLyrics by viewModel.currentTrackLyrics.collectAsStateWithLifecycle()
+    val currentWaveform by viewModel.currentWaveform.collectAsStateWithLifecycle()
+    val selectedTrackIds by viewModel.selectedTrackIds.collectAsStateWithLifecycle()
 
     var showNowPlaying by remember { mutableStateOf(false) }
     var showEqualizer by remember { mutableStateOf(false) }
@@ -131,8 +142,14 @@ fun SonicBloomApp(
     var sheetTrack by remember { mutableStateOf<AudioTrack?>(null) }
     var sheetPlaylistId by remember { mutableStateOf<Long?>(null) }
     var addToPlaylistTrack by remember { mutableStateOf<AudioTrack?>(null) }
+    var showBatchAddPlaylistDialog by remember { mutableStateOf(false) }
     var detailsTrack by remember { mutableStateOf<AudioTrack?>(null) }
     var batchPickerPlaylistId by remember { mutableStateOf<Long?>(null) }
+    var pendingExportPayload by remember { mutableStateOf<Pair<String, List<AudioTrack>>?>(null) }
+
+    LaunchedEffect(systemDark) {
+        viewModel.updateSystemDarkTheme(systemDark)
+    }
 
     val audioPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_AUDIO
@@ -166,6 +183,35 @@ fun SonicBloomApp(
         onResult = { uris ->
             if (uris.isNotEmpty()) {
                 viewModel.importAudioFiles(uris, playImmediately = playbackState.currentTrack == null)
+            }
+        }
+    )
+
+    val lyricsImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri ->
+            if (uri != null) {
+                viewModel.importLyricsForCurrentTrack(uri)
+            }
+        }
+    )
+
+    val m3uImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri ->
+            if (uri != null) {
+                viewModel.importPlaylistM3u(uri, fallbackName = "Imported Mix")
+            }
+        }
+    )
+
+    val m3uExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("audio/x-mpegurl"),
+        onResult = { uri ->
+            val payload = pendingExportPayload
+            pendingExportPayload = null
+            if (uri != null && payload != null) {
+                viewModel.exportTracksM3u(payload.first, payload.second, uri)
             }
         }
     )
@@ -248,6 +294,10 @@ fun SonicBloomApp(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
 
+    LaunchedEffect(currentDestination?.route) {
+        viewModel.clearTrackSelection()
+    }
+
     fun navigateTopLevel(route: Any) {
         navController.navigate(route) {
             popUpTo(navController.graph.findStartDestination().id) {
@@ -263,6 +313,23 @@ fun SonicBloomApp(
             .onFailure {
                 viewModel.rescanLibrary(showFeedback = false)
             }
+    }
+    val launchLyricsImport = {
+        runCatching { lyricsImportLauncher.launch(arrayOf("*/*")) }
+    }
+    val launchM3uImport = {
+        runCatching {
+            m3uImportLauncher.launch(
+                arrayOf("audio/x-mpegurl", "audio/mpegurl", "application/vnd.apple.mpegurl", "*/*")
+            )
+        }
+    }
+    val launchM3uExport: (String, List<AudioTrack>) -> Unit = { name, tracks ->
+        if (tracks.isNotEmpty()) {
+            pendingExportPayload = name to tracks
+            val sanitized = name.replace(Regex("[^A-Za-z0-9_\\- ]"), "").trim().ifEmpty { "playlist" }
+            runCatching { m3uExportLauncher.launch("$sanitized.m3u") }
+        }
     }
     val launchPermission = {
         audioPermissionLauncher.launch(audioPermission)
@@ -299,13 +366,25 @@ fun SonicBloomApp(
             bottomBar = {
                 if (!useRail) {
                     Column {
-                        MiniPlayerBar(
-                            playbackState = playbackState,
-                            onOpenNowPlaying = { showNowPlaying = true },
-                            onTogglePlayPause = viewModel::togglePlayPause,
-                            onSkipNext = viewModel::skipNext,
-                            onToggleFavorite = viewModel::toggleFavorite
-                        )
+                        AnimatedVisibility(
+                            visible = playbackState.currentTrack != null,
+                            enter = slideInVertically(
+                                animationSpec = spring(
+                                    dampingRatio = 0.88f,
+                                    stiffness = Spring.StiffnessMediumLow
+                                )
+                            ) { it } + fadeIn(tween(200)),
+                            exit = slideOutVertically { it } + fadeOut(tween(150))
+                        ) {
+                            MiniPlayerBar(
+                                playbackState = playbackState,
+                                onOpenNowPlaying = { showNowPlaying = true },
+                                onTogglePlayPause = viewModel::togglePlayPause,
+                                onSkipNext = viewModel::skipNext,
+                                onToggleFavorite = viewModel::toggleFavorite,
+                                dynamicColors = dynamicColors
+                            )
+                        }
                         HorizontalDivider(
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
                             thickness = 1.dp
@@ -399,6 +478,8 @@ fun SonicBloomApp(
                     NavHost(
                         navController = navController,
                         startDestination = HomeRoute,
+                        enterTransition = { fadeIn(tween(220)) },
+                        exitTransition = { fadeOut(tween(180)) },
                         modifier = Modifier.fillMaxSize()
                     ) {
                         composable<HomeRoute> {
@@ -426,7 +507,11 @@ fun SonicBloomApp(
                                 onOpenFolder = { folder ->
                                     navController.navigate(FolderDetailRoute(folder))
                                 },
-                                onNavigateToTracks = { navigateTopLevel(TracksRoute) }
+                                onNavigateToTracks = { navigateTopLevel(TracksRoute) },
+                                onOpenSmartPlaylist = { smartType ->
+                                    navController.navigate(PlaylistDetailRoute(smartType = smartType))
+                                },
+                                onSwipeQueueNext = viewModel::playNext
                             )
                         }
 
@@ -451,7 +536,16 @@ fun SonicBloomApp(
                                 onTrackMoreClick = { track ->
                                     sheetTrack = track
                                     sheetPlaylistId = null
-                                }
+                                },
+                                selectedTrackIds = selectedTrackIds,
+                                onToggleSelectTrack = viewModel::toggleTrackSelection,
+                                onSelectAllTracks = viewModel::selectAllTracks,
+                                onClearSelection = viewModel::clearTrackSelection,
+                                onBatchPlayNext = viewModel::batchPlayNext,
+                                onBatchAddToQueue = viewModel::batchAddToQueue,
+                                onBatchOpenPlaylistPicker = { showBatchAddPlaylistDialog = true },
+                                onSwipeQueueNext = viewModel::playNext,
+                                onSwipeToggleFavorite = viewModel::toggleFavorite
                             )
                         }
 
@@ -470,7 +564,23 @@ fun SonicBloomApp(
                                 },
                                 onOpenFolder = { folderName ->
                                     navController.navigate(FolderDetailRoute(folderName))
-                                }
+                                },
+                                currentTrackId = playbackState.currentTrack?.id,
+                                isPlaying = playbackState.isPlaying,
+                                onPlayTracks = viewModel::playTracks,
+                                onToggleFavorite = viewModel::toggleFavorite,
+                                onTrackMoreClick = { track, pid ->
+                                    sheetTrack = track
+                                    sheetPlaylistId = pid
+                                },
+                                onSwipeQueueNext = viewModel::playNext,
+                                selectedTrackIds = selectedTrackIds,
+                                onToggleSelectTrack = viewModel::toggleTrackSelection,
+                                onSelectAllTracks = viewModel::selectAllTracks,
+                                onClearSelection = viewModel::clearTrackSelection,
+                                onBatchPlayNext = viewModel::batchPlayNext,
+                                onBatchAddToQueue = viewModel::batchAddToQueue,
+                                onBatchOpenPlaylistPicker = { showBatchAddPlaylistDialog = true }
                             )
                         }
 
@@ -488,7 +598,32 @@ fun SonicBloomApp(
                                 isDuplicatePlaylistName = viewModel::isPlaylistNameDuplicate,
                                 onCreatePlaylist = { name -> viewModel.createPlaylist(name) },
                                 onRenamePlaylist = viewModel::renamePlaylist,
-                                onDeletePlaylist = viewModel::deletePlaylist
+                                onDeletePlaylist = viewModel::deletePlaylist,
+                                currentTrackId = playbackState.currentTrack?.id,
+                                isPlaying = playbackState.isPlaying,
+                                onOpenBatchTrackPicker = { pid -> batchPickerPlaylistId = pid },
+                                onPlayTracks = viewModel::playTracks,
+                                onToggleFavorite = viewModel::toggleFavorite,
+                                onTrackMoreClick = { track, pid ->
+                                    sheetTrack = track
+                                    sheetPlaylistId = pid
+                                },
+                                onSwipeQueueNext = viewModel::playNext,
+                                onRemoveTrackFromPlaylist = viewModel::removeTrackFromPlaylist,
+                                onReorderPlaylistTracks = viewModel::reorderPlaylistTracks,
+                                selectedTrackIds = selectedTrackIds,
+                                onToggleSelectTrack = viewModel::toggleTrackSelection,
+                                onSelectAllTracks = viewModel::selectAllTracks,
+                                onClearSelection = viewModel::clearTrackSelection,
+                                onBatchPlayNext = viewModel::batchPlayNext,
+                                onBatchAddToQueue = viewModel::batchAddToQueue,
+                                onBatchOpenPlaylistPicker = { showBatchAddPlaylistDialog = true },
+                                onBatchRemoveFromPlaylist = viewModel::batchRemoveFromPlaylist,
+                                onImportM3uClick = { launchM3uImport() },
+                                onExportPlaylistM3u = { playlist ->
+                                    val tracks = viewModel.getTracksForPlaylist(playlist.id)
+                                    launchM3uExport(playlist.name, tracks)
+                                }
                             )
                         }
 
@@ -509,7 +644,16 @@ fun SonicBloomApp(
                                 onTrackMoreClick = { track, pid ->
                                     sheetTrack = track
                                     sheetPlaylistId = pid
-                                }
+                                },
+                                selectedTrackIds = selectedTrackIds,
+                                onToggleSelectTrack = viewModel::toggleTrackSelection,
+                                onSelectAllTracks = viewModel::selectAllTracks,
+                                onClearSelection = viewModel::clearTrackSelection,
+                                onBatchPlayNext = viewModel::batchPlayNext,
+                                onBatchAddToQueue = viewModel::batchAddToQueue,
+                                onBatchOpenPlaylistPicker = { showBatchAddPlaylistDialog = true },
+                                onSwipeQueueNext = viewModel::playNext,
+                                onSwipeToggleFavorite = viewModel::toggleFavorite
                             )
                         }
 
@@ -529,7 +673,16 @@ fun SonicBloomApp(
                                 onTrackMoreClick = { track, pid ->
                                     sheetTrack = track
                                     sheetPlaylistId = pid
-                                }
+                                },
+                                selectedTrackIds = selectedTrackIds,
+                                onToggleSelectTrack = viewModel::toggleTrackSelection,
+                                onSelectAllTracks = viewModel::selectAllTracks,
+                                onClearSelection = viewModel::clearTrackSelection,
+                                onBatchPlayNext = viewModel::batchPlayNext,
+                                onBatchAddToQueue = viewModel::batchAddToQueue,
+                                onBatchOpenPlaylistPicker = { showBatchAddPlaylistDialog = true },
+                                onSwipeQueueNext = viewModel::playNext,
+                                onSwipeToggleFavorite = viewModel::toggleFavorite
                             )
                         }
 
@@ -549,7 +702,16 @@ fun SonicBloomApp(
                                 onTrackMoreClick = { track, pid ->
                                     sheetTrack = track
                                     sheetPlaylistId = pid
-                                }
+                                },
+                                selectedTrackIds = selectedTrackIds,
+                                onToggleSelectTrack = viewModel::toggleTrackSelection,
+                                onSelectAllTracks = viewModel::selectAllTracks,
+                                onClearSelection = viewModel::clearTrackSelection,
+                                onBatchPlayNext = viewModel::batchPlayNext,
+                                onBatchAddToQueue = viewModel::batchAddToQueue,
+                                onBatchOpenPlaylistPicker = { showBatchAddPlaylistDialog = true },
+                                onSwipeQueueNext = viewModel::playNext,
+                                onSwipeToggleFavorite = viewModel::toggleFavorite
                             )
                         }
 
@@ -568,8 +730,10 @@ fun SonicBloomApp(
                                     SmartPlaylistType.LIKED -> stringResource(R.string.playlist_liked_songs)
                                     SmartPlaylistType.MOST_PLAYED -> stringResource(R.string.playlist_most_played)
                                     SmartPlaylistType.RECENTLY_ADDED -> stringResource(R.string.playlist_recently_added)
+                                    SmartPlaylistType.LOSSLESS_VAULT -> stringResource(R.string.playlist_lossless_vault)
+                                    SmartPlaylistType.UNPLAYED_GEMS -> stringResource(R.string.playlist_unplayed_gems)
                                 }
-                                subtitle = "Smart Mix"
+                                subtitle = "Smart Auto-Mix"
                             } else {
                                 val playlist = libraryState.playlists.find { it.id == route.playlistId }
                                 contextPlaylistId = route.playlistId
@@ -595,23 +759,50 @@ fun SonicBloomApp(
                                 onTrackMoreClick = { track, pid ->
                                     sheetTrack = track
                                     sheetPlaylistId = pid
-                                }
+                                },
+                                selectedTrackIds = selectedTrackIds,
+                                onToggleSelectTrack = viewModel::toggleTrackSelection,
+                                onSelectAllTracks = viewModel::selectAllTracks,
+                                onClearSelection = viewModel::clearTrackSelection,
+                                onBatchPlayNext = viewModel::batchPlayNext,
+                                onBatchAddToQueue = viewModel::batchAddToQueue,
+                                onBatchOpenPlaylistPicker = { showBatchAddPlaylistDialog = true },
+                                onBatchRemoveFromPlaylist = viewModel::batchRemoveFromPlaylist,
+                                onSwipeQueueNext = viewModel::playNext,
+                                onSwipeToggleFavorite = viewModel::toggleFavorite,
+                                onRemoveTrackFromPlaylist = viewModel::removeTrackFromPlaylist,
+                                onReorderPlaylistTracks = viewModel::reorderPlaylistTracks,
+                                onExportM3u = if (tracks.isNotEmpty()) {
+                                    { launchM3uExport(title, tracks) }
+                                } else null
                             )
                         }
                     }
 
                     if (useRail) {
-                        MiniPlayerBar(
-                            playbackState = playbackState,
-                            onOpenNowPlaying = { showNowPlaying = true },
-                            onTogglePlayPause = viewModel::togglePlayPause,
-                            onSkipNext = viewModel::skipNext,
-                            onToggleFavorite = viewModel::toggleFavorite,
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .navigationBarsPadding()
-                                .padding(horizontal = 16.dp, vertical = 12.dp)
-                        )
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = playbackState.currentTrack != null,
+                            enter = slideInVertically(
+                                animationSpec = spring(
+                                    dampingRatio = 0.88f,
+                                    stiffness = Spring.StiffnessMediumLow
+                                )
+                            ) { it } + fadeIn(tween(200)),
+                            exit = slideOutVertically { it } + fadeOut(tween(150)),
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        ) {
+                            MiniPlayerBar(
+                                playbackState = playbackState,
+                                onOpenNowPlaying = { showNowPlaying = true },
+                                onTogglePlayPause = viewModel::togglePlayPause,
+                                onSkipNext = viewModel::skipNext,
+                                onToggleFavorite = viewModel::toggleFavorite,
+                                dynamicColors = dynamicColors,
+                                modifier = Modifier
+                                    .navigationBarsPadding()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -619,8 +810,13 @@ fun SonicBloomApp(
 
         AnimatedVisibility(
             visible = showNowPlaying && playbackState.currentTrack != null,
-            enter = slideInVertically(initialOffsetY = { it }),
-            exit = slideOutVertically(targetOffsetY = { it })
+            enter = slideInVertically(
+                animationSpec = spring(
+                    dampingRatio = 0.88f,
+                    stiffness = Spring.StiffnessMediumLow
+                )
+            ) { it } + fadeIn(tween(220)),
+            exit = slideOutVertically { it } + fadeOut(tween(180))
         ) {
             NowPlayingScreen(
                 playbackState = playbackState,
@@ -641,7 +837,14 @@ fun SonicBloomApp(
                     sheetTrack = track
                     sheetPlaylistId = null
                 },
-                onClearError = viewModel::clearPlaybackError
+                onClearError = viewModel::clearPlaybackError,
+                dynamicColors = dynamicColors,
+                trackLyrics = currentTrackLyrics,
+                onImportLyricsFile = { launchLyricsImport() },
+                onClearLyrics = viewModel::clearLyricsForCurrentTrack,
+                waveform = currentWaveform,
+                onAbLoopClick = viewModel::onAbLoopClick,
+                onClearAbLoop = viewModel::clearAbLoop
             )
         }
     }
@@ -667,12 +870,29 @@ fun SonicBloomApp(
 
     addToPlaylistTrack?.let { track ->
         AddToPlaylistDialog(
-            track = track,
+            subtitleLabel = track.title,
             playlists = libraryState.playlists,
             isDuplicateName = { name -> viewModel.isPlaylistNameDuplicate(name) },
             onDismiss = { addToPlaylistTrack = null },
             onSelectPlaylist = { pid -> viewModel.addTrackToPlaylist(pid, track.id) },
             onCreateAndAdd = { newName -> viewModel.createPlaylist(newName, track.id) }
+        )
+    }
+
+    if (showBatchAddPlaylistDialog && selectedTrackIds.isNotEmpty()) {
+        AddToPlaylistDialog(
+            subtitleLabel = "${selectedTrackIds.size} selected tracks",
+            playlists = libraryState.playlists,
+            isDuplicateName = { name -> viewModel.isPlaylistNameDuplicate(name) },
+            onDismiss = { showBatchAddPlaylistDialog = false },
+            onSelectPlaylist = { pid ->
+                showBatchAddPlaylistDialog = false
+                viewModel.batchAddToPlaylist(pid)
+            },
+            onCreateAndAdd = { newName ->
+                showBatchAddPlaylistDialog = false
+                viewModel.batchCreateAndAddToPlaylist(newName)
+            }
         )
     }
 
@@ -687,9 +907,16 @@ fun SonicBloomApp(
     }
 
     detailsTrack?.let { track ->
+        val latestTrack = libraryState.allTracks.find { it.id == track.id } ?: track
         TrackDetailsDialog(
-            track = track,
-            onDismiss = { detailsTrack = null }
+            track = latestTrack,
+            onDismiss = { detailsTrack = null },
+            onSaveMetadataOverride = { newTitle, newArtist, newAlbum ->
+                viewModel.saveTrackMetadataOverride(latestTrack.id, newTitle, newArtist, newAlbum)
+            },
+            onResetMetadataOverride = {
+                viewModel.clearTrackMetadataOverride(latestTrack.id)
+            }
         )
     }
 
@@ -700,19 +927,28 @@ fun SonicBloomApp(
             onSelectThemeMode = viewModel::setThemeMode,
             onOpenEqualizer = { showEqualizer = true },
             onRescanLibrary = { viewModel.rescanLibrary(showFeedback = true) },
-            onImportAudioFiles = { launchImport() }
+            onImportAudioFiles = { launchImport() },
+            onCrossfadeChange = viewModel::setCrossfadeSeconds,
+            onVolumeNormalizationChange = viewModel::setVolumeNormalizationEnabled,
+            onMinDurationChange = viewModel::setMinTrackDurationSec,
+            onToggleExcludedFolder = viewModel::toggleExcludedFolder,
+            onClearExcludedFolders = viewModel::clearExcludedFolders,
+            onClearArtworkCache = viewModel::clearArtworkCache
         )
     }
 
     if (showEqualizer) {
         EqualizerBottomSheet(
             equalizerState = equalizerState,
-            presets = viewModel.equalizerPresets,
+            presets = viewModel.builtInEqualizerPresets,
             onDismiss = { showEqualizer = false },
             onToggleEnabled = viewModel::setEqEnabled,
             onSelectPreset = viewModel::applyEqPreset,
             onBandLevelChange = viewModel::setEqBandLevel,
-            onBassBoostChange = viewModel::setBassBoost
+            onBassBoostChange = viewModel::setBassBoost,
+            onVirtualizerChange = viewModel::setVirtualizerStrength,
+            onSaveCustomPreset = viewModel::saveCustomEqPreset,
+            onDeleteCustomPreset = viewModel::deleteCustomEqPreset
         )
     }
 

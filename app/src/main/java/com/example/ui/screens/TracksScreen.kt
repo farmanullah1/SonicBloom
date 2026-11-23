@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
@@ -61,6 +63,7 @@ import com.example.R
 import com.example.data.model.AudioTrack
 import com.example.data.model.TrackFilterOption
 import com.example.data.model.TrackSortOption
+import com.example.ui.components.BatchSelectionBar
 import com.example.ui.components.SonicBloomTopBar
 import com.example.ui.components.StudioEmptyState
 import com.example.ui.components.StudioErrorBanner
@@ -86,9 +89,20 @@ fun TracksScreen(
     onPlayTracks: (List<AudioTrack>, Int) -> Unit,
     onToggleFavorite: (AudioTrack) -> Unit,
     onTrackMoreClick: (AudioTrack) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    selectedTrackIds: Set<String> = emptySet(),
+    onToggleSelectTrack: (String) -> Unit = {},
+    onSelectAllTracks: (List<AudioTrack>) -> Unit = {},
+    onClearSelection: () -> Unit = {},
+    onBatchPlayNext: (List<AudioTrack>) -> Unit = {},
+    onBatchAddToQueue: (List<AudioTrack>) -> Unit = {},
+    onBatchOpenPlaylistPicker: () -> Unit = {},
+    onSwipeQueueNext: ((AudioTrack) -> Unit)? = null,
+    onSwipeToggleFavorite: ((AudioTrack) -> Unit)? = null
 ) {
     var sortMenuExpanded by remember { mutableStateOf(false) }
+    var multiSelectToggle by remember { mutableStateOf(false) }
+    val isSelectionMode = selectedTrackIds.isNotEmpty() || multiSelectToggle
 
     Column(modifier = modifier.fillMaxSize()) {
         SonicBloomTopBar(
@@ -326,8 +340,30 @@ fun TracksScreen(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                if (libraryState.filteredTracks.isNotEmpty()) {
+                    IconButton(
+                        onClick = {
+                            if (isSelectionMode) {
+                                multiSelectToggle = false
+                                onClearSelection()
+                            } else {
+                                multiSelectToggle = true
+                            }
+                        },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("tracks_select_mode_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Checklist,
+                            contentDescription = stringResource(R.string.action_select_tracks),
+                            tint = if (isSelectionMode) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
                 IconButton(
                     onClick = onToggleSortDirection,
                     modifier = Modifier
@@ -347,7 +383,29 @@ fun TracksScreen(
             }
         }
 
-        if (libraryState.filteredTracks.isNotEmpty()) {
+        AnimatedVisibility(visible = isSelectionMode && libraryState.filteredTracks.isNotEmpty()) {
+            BatchSelectionBar(
+                selectedCount = selectedTrackIds.size,
+                onSelectAll = { onSelectAllTracks(libraryState.filteredTracks) },
+                onPlayNext = {
+                    multiSelectToggle = false
+                    onBatchPlayNext(libraryState.filteredTracks)
+                },
+                onAddToQueue = {
+                    multiSelectToggle = false
+                    onBatchAddToQueue(libraryState.filteredTracks)
+                },
+                onAddToPlaylist = {
+                    onBatchOpenPlaylistPicker()
+                },
+                onClearSelection = {
+                    multiSelectToggle = false
+                    onClearSelection()
+                }
+            )
+        }
+
+        if (libraryState.filteredTracks.isNotEmpty() && !isSelectionMode) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -449,13 +507,28 @@ fun TracksScreen(
                     libraryState.filteredTracks,
                     key = { _, item -> item.id }
                 ) { index, track ->
+                    val selected = selectedTrackIds.contains(track.id)
                     TrackRowItem(
                         track = track,
                         isCurrentTrack = track.id == currentTrackId,
                         isPlaying = isPlaying && track.id == currentTrackId,
-                        onClick = { onPlayTracks(libraryState.filteredTracks, index) },
+                        onClick = {
+                            if (isSelectionMode) {
+                                onToggleSelectTrack(track.id)
+                            } else {
+                                onPlayTracks(libraryState.filteredTracks, index)
+                            }
+                        },
                         onToggleFavorite = { onToggleFavorite(track) },
-                        onMoreClick = { onTrackMoreClick(track) }
+                        onMoreClick = { onTrackMoreClick(track) },
+                        selectionMode = isSelectionMode,
+                        isSelected = selected,
+                        onLongPress = {
+                            multiSelectToggle = true
+                            onToggleSelectTrack(track.id)
+                        },
+                        onSwipeQueueNext = onSwipeQueueNext?.let { fn -> { fn(track) } },
+                        onSwipeSecondaryAction = onSwipeToggleFavorite?.let { fn -> { fn(track) } }
                     )
                 }
             }

@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,15 +31,18 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.AudioTrack
+import com.example.data.model.DynamicTrackColors
 import com.example.playback.PlaybackUiState
 
 @Composable
@@ -47,7 +52,8 @@ fun MiniPlayerBar(
     onTogglePlayPause: () -> Unit,
     onSkipNext: () -> Unit,
     onToggleFavorite: (AudioTrack) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    dynamicColors: DynamicTrackColors = DynamicTrackColors()
 ) {
     val track = playbackState.currentTrack ?: return
     val progress = if (playbackState.durationMs > 0L) {
@@ -56,18 +62,32 @@ fun MiniPlayerBar(
         0f
     }
 
+    val accentColor by animateColorAsState(
+        targetValue = dynamicColors.accentColor ?: MaterialTheme.colorScheme.primary,
+        animationSpec = tween(450),
+        label = "mini_accent"
+    )
+    val baseContainer = MaterialTheme.colorScheme.surfaceContainerHigh
+    val targetSurface = dynamicColors.surfaceTint?.copy(alpha = 0.24f)?.compositeOver(baseContainer)
+        ?: baseContainer
+    val surfaceColor by animateColorAsState(
+        targetValue = targetSurface,
+        animationSpec = tween(450),
+        label = "mini_surface"
+    )
+
     Surface(
         shape = RoundedCornerShape(18.dp),
         tonalElevation = 4.dp,
         shadowElevation = 6.dp,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = surfaceColor,
         contentColor = MaterialTheme.colorScheme.onSurface,
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outline,
+                color = accentColor.copy(alpha = 0.35f),
                 shape = RoundedCornerShape(18.dp)
             )
             .clip(RoundedCornerShape(18.dp))
@@ -119,7 +139,7 @@ fun MiniPlayerBar(
                         imageVector = if (track.isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
                         contentDescription = stringResource(R.string.cd_favorite),
                         tint = if (track.isFavorite) {
-                            MaterialTheme.colorScheme.primary
+                            accentColor
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         }
@@ -130,7 +150,7 @@ fun MiniPlayerBar(
                     modifier = Modifier
                         .size(44.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
+                        .background(accentColor)
                         .clickable(onClick = onTogglePlayPause)
                         .testTag("mini_player_play_pause"),
                     contentAlignment = Alignment.Center
@@ -162,7 +182,7 @@ fun MiniPlayerBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(2.5.dp),
-                color = MaterialTheme.colorScheme.primary,
+                color = accentColor,
                 trackColor = MaterialTheme.colorScheme.outlineVariant
             )
         }

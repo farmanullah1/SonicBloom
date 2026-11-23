@@ -3,6 +3,7 @@ package com.example.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,15 +21,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -39,6 +44,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -46,10 +52,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,10 +89,17 @@ fun EqualizerBottomSheet(
     onToggleEnabled: (Boolean) -> Unit,
     onSelectPreset: (String) -> Unit,
     onBandLevelChange: (Int, Int) -> Unit,
-    onBassBoostChange: (Int) -> Unit
+    onBassBoostChange: (Int) -> Unit,
+    onVirtualizerChange: (Int) -> Unit = {},
+    onSaveCustomPreset: (String) -> Unit = {},
+    onDeleteCustomPreset: (String) -> Unit = {}
 ) {
+    var showSaveDialog by remember { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
         contentWindowInsets = { WindowInsets.navigationBars }
@@ -82,6 +107,7 @@ fun EqualizerBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -106,11 +132,23 @@ fun EqualizerBottomSheet(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
-                Switch(
-                    checked = equalizerState.isEnabled,
-                    onCheckedChange = onToggleEnabled,
-                    modifier = Modifier.testTag("eq_master_switch")
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = { showSaveDialog = true },
+                        enabled = equalizerState.bands.isNotEmpty(),
+                        modifier = Modifier.testTag("eq_save_preset_button")
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(stringResource(R.string.equalizer_save_preset), maxLines = 1)
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Switch(
+                        checked = equalizerState.isEnabled,
+                        onCheckedChange = onToggleEnabled,
+                        modifier = Modifier.testTag("eq_master_switch")
+                    )
+                }
             }
 
             Row(
@@ -131,6 +169,30 @@ fun EqualizerBottomSheet(
                             labelColor = MaterialTheme.colorScheme.onSurface
                         ),
                         modifier = Modifier.testTag("eq_preset_$preset")
+                    )
+                }
+                equalizerState.customPresets.forEach { customName ->
+                    val selected = equalizerState.activePreset == customName
+                    FilterChip(
+                        selected = selected,
+                        onClick = { onSelectPreset(customName) },
+                        label = { Text(customName, maxLines = 1, softWrap = false) },
+                        trailingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Delete preset $customName",
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clickable { onDeleteCustomPreset(customName) }
+                                    .testTag("eq_delete_preset_$customName")
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            labelColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier.testTag("eq_custom_preset_$customName")
                     )
                 }
             }
@@ -224,7 +286,88 @@ fun EqualizerBottomSheet(
                     modifier = Modifier.testTag("eq_bass_boost_slider")
                 )
             }
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.equalizer_virtualizer),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "${(equalizerState.virtualizerStrength / 10)}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+                Slider(
+                    value = equalizerState.virtualizerStrength.toFloat(),
+                    onValueChange = { onVirtualizerChange(it.roundToInt()) },
+                    valueRange = 0f..1000f,
+                    enabled = equalizerState.isEnabled,
+                    colors = SliderDefaults.colors(
+                        thumbColor = MaterialTheme.colorScheme.tertiary,
+                        activeTrackColor = MaterialTheme.colorScheme.tertiary
+                    ),
+                    modifier = Modifier.testTag("eq_virtualizer_slider")
+                )
+                if (!equalizerState.virtualizerAvailable && equalizerState.isAvailable) {
+                    Text(
+                        text = "Spatial virtualizer activates automatically on headphones or supported stereo routes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
+    }
+
+    if (showSaveDialog) {
+        var presetName by remember { mutableStateOf("") }
+        val trimmed = presetName.trim()
+        val invalidBuiltin = presets.any { it.equals(trimmed, ignoreCase = true) }
+        AlertDialog(
+            onDismissRequest = { showSaveDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
+            title = { Text(stringResource(R.string.equalizer_save_preset)) },
+            text = {
+                OutlinedTextField(
+                    value = presetName,
+                    onValueChange = { presetName = it },
+                    label = { Text("Preset name") },
+                    isError = invalidBuiltin,
+                    supportingText = if (invalidBuiltin) {
+                        { Text("Built-in preset names cannot be overwritten.") }
+                    } else null,
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("eq_save_preset_input")
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = trimmed.isNotEmpty() && !invalidBuiltin,
+                    onClick = {
+                        onSaveCustomPreset(trimmed)
+                        showSaveDialog = false
+                    },
+                    modifier = Modifier.testTag("eq_save_preset_confirm")
+                ) {
+                    Text(stringResource(R.string.action_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
     }
 }
 
@@ -399,6 +542,8 @@ fun QueueBottomSheet(
     onRemoveIndex: (Int) -> Unit,
     onClearQueue: () -> Unit
 ) {
+    val haptics = LocalHapticFeedback.current
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surface,
@@ -455,6 +600,11 @@ fun QueueBottomSheet(
                     subtitle = stringResource(R.string.empty_queue_subtitle)
                 )
             } else {
+                var draggedIndex by remember { mutableIntStateOf(-1) }
+                var dragOffsetY by remember { mutableFloatStateOf(0f) }
+                val rowStepPx = with(LocalDensity.current) { 64.dp.toPx() }
+                val latestQueueSize by rememberUpdatedState(queue.size)
+
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -462,19 +612,79 @@ fun QueueBottomSheet(
                 ) {
                     itemsIndexed(queue, key = { index, item -> "${index}_${item.id}" }) { index, track ->
                         val isCurrent = index == currentIndex
+                        val isDragging = index == draggedIndex
+                        val latestIndex by rememberUpdatedState(index)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .graphicsLayer {
+                                    translationY = if (isDragging) dragOffsetY else 0f
+                                    scaleX = if (isDragging) 1.02f else 1f
+                                    scaleY = if (isDragging) 1.02f else 1f
+                                }
+                                .background(
+                                    if (isDragging) MaterialTheme.colorScheme.surfaceContainerHigh
+                                    else Color.Transparent
+                                )
                                 .clickable { onJumpToIndex(index) }
-                                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                                .padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Box(
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .pointerInput(track.id) {
+                                        detectVerticalDragGestures(
+                                            onDragStart = {
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                draggedIndex = latestIndex
+                                                dragOffsetY = 0f
+                                            },
+                                            onVerticalDrag = { change, dragAmount ->
+                                                change.consume()
+                                                dragOffsetY += dragAmount
+                                                val currentPos = draggedIndex
+                                                if (currentPos >= 0) {
+                                                    if (dragOffsetY > rowStepPx && currentPos < latestQueueSize - 1) {
+                                                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                        onMoveItem(currentPos, currentPos + 1)
+                                                        draggedIndex = currentPos + 1
+                                                        dragOffsetY -= rowStepPx
+                                                    } else if (dragOffsetY < -rowStepPx && currentPos > 0) {
+                                                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                        onMoveItem(currentPos, currentPos - 1)
+                                                        draggedIndex = currentPos - 1
+                                                        dragOffsetY += rowStepPx
+                                                    }
+                                                }
+                                            },
+                                            onDragEnd = {
+                                                draggedIndex = -1
+                                                dragOffsetY = 0f
+                                            },
+                                            onDragCancel = {
+                                                draggedIndex = -1
+                                                dragOffsetY = 0f
+                                            }
+                                        )
+                                    }
+                                    .testTag("queue_drag_handle_$index"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.DragHandle,
+                                    contentDescription = "Drag to reorder",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
                             TrackArtwork(
                                 albumArtUri = track.albumArtUri,
                                 size = 44.dp,
                                 shape = RoundedCornerShape(10.dp)
                             )
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = track.title,

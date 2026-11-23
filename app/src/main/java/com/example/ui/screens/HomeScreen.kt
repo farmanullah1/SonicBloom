@@ -25,10 +25,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Timer
@@ -57,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.AudioTrack
 import com.example.data.model.SleepTimerState
+import com.example.data.model.SmartPlaylistType
 import com.example.ui.components.SonicBloomTopBar
 import com.example.ui.components.StudioEmptyState
 import com.example.ui.components.StudioErrorBanner
@@ -90,7 +95,9 @@ fun HomeScreen(
     onTrackMoreClick: (AudioTrack) -> Unit,
     onOpenFolder: (String) -> Unit,
     onNavigateToTracks: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenSmartPlaylist: (SmartPlaylistType) -> Unit = {},
+    onSwipeQueueNext: ((AudioTrack) -> Unit)? = null
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         SonicBloomTopBar(
@@ -192,6 +199,58 @@ fun HomeScreen(
                 }
             }
 
+            if (libraryState.allTracks.isNotEmpty()) {
+                item {
+                    SectionHeader(title = "Smart Auto-Mixes")
+                    Spacer(modifier = Modifier.height(10.dp))
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        item(key = "mix_lossless") {
+                            HomeMixCard(
+                                title = stringResource(R.string.playlist_lossless_vault),
+                                count = libraryState.losslessVaultTracks.size,
+                                icon = Icons.Filled.HighQuality,
+                                accentColor = MaterialTheme.colorScheme.secondary,
+                                testTag = "home_mix_lossless",
+                                onClick = { onOpenSmartPlaylist(SmartPlaylistType.LOSSLESS_VAULT) }
+                            )
+                        }
+                        item(key = "mix_unplayed") {
+                            HomeMixCard(
+                                title = stringResource(R.string.playlist_unplayed_gems),
+                                count = libraryState.unplayedGemsTracks.size,
+                                icon = Icons.Filled.AutoAwesome,
+                                accentColor = MaterialTheme.colorScheme.tertiary,
+                                testTag = "home_mix_unplayed",
+                                onClick = { onOpenSmartPlaylist(SmartPlaylistType.UNPLAYED_GEMS) }
+                            )
+                        }
+                        item(key = "mix_most_played") {
+                            HomeMixCard(
+                                title = stringResource(R.string.playlist_most_played),
+                                count = libraryState.mostPlayedTracks.size,
+                                icon = Icons.AutoMirrored.Filled.TrendingUp,
+                                accentColor = MaterialTheme.colorScheme.primary,
+                                testTag = "home_mix_most_played",
+                                onClick = { onOpenSmartPlaylist(SmartPlaylistType.MOST_PLAYED) }
+                            )
+                        }
+                        item(key = "mix_recent") {
+                            HomeMixCard(
+                                title = stringResource(R.string.playlist_recently_added),
+                                count = libraryState.recentlyAddedTracks.size,
+                                icon = Icons.Filled.History,
+                                accentColor = MaterialTheme.colorScheme.secondary,
+                                testTag = "home_mix_recent",
+                                onClick = { onOpenSmartPlaylist(SmartPlaylistType.RECENTLY_ADDED) }
+                            )
+                        }
+                    }
+                }
+            }
+
             if (libraryState.recentlyPlayed.isNotEmpty()) {
                 item {
                     SectionHeader(
@@ -236,7 +295,9 @@ fun HomeScreen(
                         isPlaying = isPlaying && track.id == currentTrackId,
                         onClick = { onPlayTracks(libraryState.favoriteTracks, index) },
                         onToggleFavorite = { onToggleFavorite(track) },
-                        onMoreClick = { onTrackMoreClick(track) }
+                        onMoreClick = { onTrackMoreClick(track) },
+                        onSwipeQueueNext = onSwipeQueueNext?.let { fn -> { fn(track) } },
+                        onSwipeSecondaryAction = { onToggleFavorite(track) }
                     )
                 }
             }
@@ -311,10 +372,70 @@ fun HomeScreen(
                         isPlaying = isPlaying && track.id == currentTrackId,
                         onClick = { onPlayTracks(libraryState.allTracks, index) },
                         onToggleFavorite = { onToggleFavorite(track) },
-                        onMoreClick = { onTrackMoreClick(track) }
+                        onMoreClick = { onTrackMoreClick(track) },
+                        onSwipeQueueNext = onSwipeQueueNext?.let { fn -> { fn(track) } },
+                        onSwipeSecondaryAction = { onToggleFavorite(track) }
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HomeMixCard(
+    title: String,
+    count: Int,
+    icon: ImageVector,
+    accentColor: Color,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+            .width(172.dp)
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant,
+                RoundedCornerShape(18.dp)
+            )
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .testTag(testTag)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(accentColor.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = stringResource(R.string.playlist_track_count, count),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

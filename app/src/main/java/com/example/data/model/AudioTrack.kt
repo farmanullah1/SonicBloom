@@ -1,5 +1,6 @@
 package com.example.data.model
 
+import androidx.compose.ui.graphics.Color
 import kotlinx.serialization.Serializable
 
 data class AudioTrack(
@@ -19,7 +20,8 @@ data class AudioTrack(
     val isImported: Boolean = false,
     val isFavorite: Boolean = false,
     val playCount: Int = 0,
-    val lastPlayedAt: Long = 0L
+    val lastPlayedAt: Long = 0L,
+    val isMetadataOverridden: Boolean = false
 ) {
     val isMp3: Boolean
         get() = mimeType.contains("mpeg", ignoreCase = true) || mimeType.contains("mp3", ignoreCase = true)
@@ -78,7 +80,9 @@ data class PlaylistInfo(
 enum class SmartPlaylistType {
     LIKED,
     MOST_PLAYED,
-    RECENTLY_ADDED
+    RECENTLY_ADDED,
+    LOSSLESS_VAULT,
+    UNPLAYED_GEMS
 }
 
 enum class TrackSortOption {
@@ -115,6 +119,37 @@ enum class ThemeMode {
     DARK
 }
 
+data class LyricsLine(
+    val timestampMs: Long?,
+    val text: String
+)
+
+data class TrackLyrics(
+    val trackId: String,
+    val lines: List<LyricsLine>,
+    val isSynced: Boolean,
+    val sourceLabel: String
+)
+
+data class DynamicTrackColors(
+    val accentColor: Color? = null,
+    val surfaceTint: Color? = null
+)
+
+data class WaveformData(
+    val trackId: String = "",
+    val amplitudes: List<Float> = emptyList(),
+    val isRealPcm: Boolean = false,
+    val suggestedGainDb: Float = 0f
+)
+
+data class CustomEqPreset(
+    val name: String,
+    val bandLevelsMb: List<Int>,
+    val bassBoostStrength: Int,
+    val virtualizerStrength: Int
+)
+
 data class EqualizerBandUi(
     val index: Int,
     val centerFreqHz: Int,
@@ -129,6 +164,10 @@ data class EqualizerState(
     val bands: List<EqualizerBandUi> = emptyList(),
     val activePreset: String = "Flat",
     val bassBoostStrength: Int = 0,
+    val virtualizerAvailable: Boolean = false,
+    val virtualizerStrength: Int = 0,
+    val normalizationAvailable: Boolean = true,
+    val customPresets: List<String> = emptyList(),
     val statusMessage: String? = null
 )
 

@@ -5,4 +5,9 @@
     <color name="slate_surface">#141821</color>
     <color name="bloom_coral">#FF6B4A</color>
     <color name="sage_teal">#3CE6B5</color>
+    <color name="widget_surface">#FFFFFF</color>
+    <color name="widget_border">#E3DFD6</color>
+    <color name="widget_on_surface">#14171F</color>
+    <color name="widget_on_surface_variant">#575E6E</color>
+    <color name="widget_accent">#D94626</color>
 </resources>

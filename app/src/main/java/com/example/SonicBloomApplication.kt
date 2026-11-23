@@ -1,6 +1,7 @@
 package com.example
 
 import android.app.Application
+import android.content.Context
 import com.example.data.local.PreferencesRepository
 import com.example.data.local.SonicBloomDatabase
 import com.example.data.repository.MusicLibraryRepository
@@ -8,6 +9,7 @@ import com.example.playback.AudioEffectManager
 import com.example.playback.PlaybackController
 
 class AppContainer(application: Application) {
+    val appContext: Context = application.applicationContext
     val database: SonicBloomDatabase = SonicBloomDatabase.getInstance(application)
     val preferencesRepository: PreferencesRepository = PreferencesRepository(application)
     val musicLibraryRepository: MusicLibraryRepository = MusicLibraryRepository(

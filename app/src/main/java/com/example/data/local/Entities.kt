@@ -57,5 +57,41 @@ data class ImportedTrackEntity(
     val bitrateKbps: Int?,
     val sizeBytes: Long,
     val folderName: String,
+    val albumArtUri: String? = null,
     val addedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "track_lyrics")
+data class TrackLyricsEntity(
+    @PrimaryKey val trackId: String,
+    val rawLyrics: String,
+    val sourceLabel: String,
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "track_metadata_overrides")
+data class TrackMetadataOverrideEntity(
+    @PrimaryKey val trackId: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "custom_eq_presets")
+data class CustomEqPresetEntity(
+    @PrimaryKey val name: String,
+    val bandLevelsCsv: String,
+    val bassBoostStrength: Int,
+    val virtualizerStrength: Int,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "waveform_peaks")
+data class WaveformPeakEntity(
+    @PrimaryKey val trackId: String,
+    val fileSignature: String,
+    val peaksCsv: String,
+    val suggestedGainDb: Float,
+    val updatedAt: Long = System.currentTimeMillis()
 )

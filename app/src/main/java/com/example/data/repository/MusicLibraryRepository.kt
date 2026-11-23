@@ -8,19 +8,38 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import com.example.data.local.CustomEqPresetEntity
 import com.example.data.local.FavoriteTrackEntity
 import com.example.data.local.ImportedTrackEntity
 import com.example.data.local.PlayHistoryEntity
 import com.example.data.local.PlaylistEntity
 import com.example.data.local.PlaylistTrackCrossRef
 import com.example.data.local.SonicBloomDao
+import com.example.data.local.TrackLyricsEntity
+import com.example.data.local.TrackMetadataOverrideEntity
+import com.example.data.local.WaveformPeakEntity
 import com.example.data.model.AudioTrack
+import com.example.data.model.CustomEqPreset
 import com.example.data.model.PlaylistInfo
+import com.example.data.model.TrackLyrics
+import com.example.data.model.WaveformData
+import com.example.ui.util.ArtDiskCacheManager
+import com.example.ui.util.ArtworkColorExtractor
+import com.example.ui.util.LyricsParser
+import com.example.ui.util.M3uPlaylistCodec
+import com.example.ui.util.WaveformExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.io.File
 
 sealed interface LibraryScanResult {
     data class Success(val count: Int) : LibraryScanResult
@@ -34,23 +53,44 @@ data class ImportAudioResult(
     val errorMessage: String? = null
 )
 
+data class M3uImportOutcome(
+    val playlistId: Long?,
+    val playlistName: String,
+    val matchedCount: Int,
+    val skippedCount: Int
+)
+
 class MusicLibraryRepository(
     private val context: Context,
     private val dao: SonicBloomDao
 ) {
     private val scannedMediaStoreTracks = MutableStateFlow<List<AudioTrack>>(emptyList())
     private val isScanningFlow = MutableStateFlow(false)
+    private val _artCacheSizeBytes = MutableStateFlow(0L)
 
     val isScanning: Flow<Boolean> = isScanningFlow
+    val artCacheSizeBytes: StateFlow<Long> = _artCacheSizeBytes.asStateFlow()
+
+    init {
+        refreshArtCacheSize()
+    }
+
+    private fun artCacheDir(): File = File(context.cacheDir, "album_art")
+
+    private fun refreshArtCacheSize() {
+        _artCacheSizeBytes.value = ArtDiskCacheManager.computeDirectorySizeBytes(artCacheDir())
+    }
 
     val allTracks: Flow<List<AudioTrack>> = combine(
         scannedMediaStoreTracks,
         dao.observeImportedTracks(),
         dao.observeFavorites(),
-        dao.observePlayHistory()
-    ) { scanned, imported, favorites, history ->
+        dao.observePlayHistory(),
+        dao.observeMetadataOverrides()
+    ) { scanned, imported, favorites, history, overrides ->
         val favIds = favorites.map { it.trackId }.toSet()
         val historyMap = history.associateBy { it.trackId }
+        val overrideMap = overrides.associateBy { it.trackId }
 
         val importedTracks = imported.map { entity ->
             AudioTrack(
@@ -61,7 +101,7 @@ class MusicLibraryRepository(
                 album = entity.album,
                 albumId = -1L,
                 durationMs = entity.durationMs,
-                albumArtUri = null,
+                albumArtUri = entity.albumArtUri,
                 folderName = entity.folderName,
                 mimeType = entity.mimeType,
                 bitrateKbps = entity.bitrateKbps,
@@ -74,10 +114,15 @@ class MusicLibraryRepository(
         val merged = (scanned + importedTracks).distinctBy { it.contentUri }
         merged.map { track ->
             val hist = historyMap[track.id]
+            val tagOverride = overrideMap[track.id]
             track.copy(
+                title = tagOverride?.title?.takeIf { it.isNotBlank() } ?: track.title,
+                artist = tagOverride?.artist?.takeIf { it.isNotBlank() } ?: track.artist,
+                album = tagOverride?.album?.takeIf { it.isNotBlank() } ?: track.album,
                 isFavorite = favIds.contains(track.id),
                 playCount = hist?.playCount ?: 0,
-                lastPlayedAt = hist?.lastPlayedAt ?: 0L
+                lastPlayedAt = hist?.lastPlayedAt ?: 0L,
+                isMetadataOverridden = tagOverride != null
             )
         }
     }
@@ -100,6 +145,22 @@ class MusicLibraryRepository(
                 name = entity.name,
                 trackIds = validTrackIds,
                 coverArtUri = cover
+            )
+        }
+    }
+
+    val customEqPresets: Flow<List<CustomEqPreset>> = dao.observeCustomEqPresets().map { entities ->
+        entities.map { entity ->
+            val levels = runCatching {
+                Json.decodeFromString<List<Int>>(entity.bandLevelsCsv)
+            }.getOrElse {
+                entity.bandLevelsCsv.split(',').mapNotNull { it.trim().toIntOrNull() }
+            }
+            CustomEqPreset(
+                name = entity.name,
+                bandLevelsMb = levels,
+                bassBoostStrength = entity.bassBoostStrength,
+                virtualizerStrength = entity.virtualizerStrength
             )
         }
     }
@@ -282,7 +343,7 @@ class MusicLibraryRepository(
                         album = entity.album,
                         albumId = -1L,
                         durationMs = entity.durationMs,
-                        albumArtUri = null,
+                        albumArtUri = entity.albumArtUri,
                         folderName = entity.folderName,
                         mimeType = entity.mimeType,
                         bitrateKbps = entity.bitrateKbps,
@@ -315,12 +376,15 @@ class MusicLibraryRepository(
             }
         }
 
+        val uriString = uri.toString()
+        val trackId = "imp_${uriString.hashCode().toUInt()}"
         val retriever = MediaMetadataRetriever()
         var title = ""
         var artist = "Unknown Artist"
         var album = "Imported Audio"
         var durationMs = 0L
         var bitrateKbps: Int? = null
+        var embeddedArtUri: String? = null
         val mimeType = context.contentResolver.getType(uri) ?: "audio/mpeg"
 
         try {
@@ -335,6 +399,7 @@ class MusicLibraryRepository(
             val bitrateBps = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
                 ?.toIntOrNull()
             bitrateKbps = if (bitrateBps != null && bitrateBps > 0) bitrateBps / 1000 else null
+            embeddedArtUri = saveEmbeddedArtBytes(trackId, retriever.embeddedPicture)
         } finally {
             runCatching { retriever.release() }
         }
@@ -342,9 +407,8 @@ class MusicLibraryRepository(
         val finalTitle = title.ifBlank {
             displayName?.substringBeforeLast('.')?.ifBlank { "Imported Track" } ?: "Imported Track"
         }
-        val uriString = uri.toString()
         ImportedTrackEntity(
-            id = "imp_${uriString.hashCode().toUInt()}",
+            id = trackId,
             contentUri = uriString,
             title = finalTitle,
             artist = artist,
@@ -353,8 +417,98 @@ class MusicLibraryRepository(
             mimeType = mimeType,
             bitrateKbps = bitrateKbps,
             sizeBytes = sizeBytes,
-            folderName = "Imported Files"
+            folderName = "Imported Files",
+            albumArtUri = embeddedArtUri
         )
+    }
+
+    private fun saveEmbeddedArtBytes(trackId: String, bytes: ByteArray?): String? {
+        if (bytes == null || bytes.isEmpty()) return null
+        return runCatching {
+            val dir = artCacheDir().apply { mkdirs() }
+            val safeName = trackId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            val file = File(dir, "$safeName.jpg")
+            file.writeBytes(bytes)
+            file.setLastModified(System.currentTimeMillis())
+            ArtDiskCacheManager.enforceMaxCacheBytes(dir)
+            refreshArtCacheSize()
+            Uri.fromFile(file).toString()
+        }.getOrNull()
+    }
+
+    suspend fun resolveEmbeddedArtworkIfMissing(track: AudioTrack): String? = withContext(Dispatchers.IO) {
+        val dir = artCacheDir()
+        val safeName = track.id.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val cachedFile = File(dir, "$safeName.jpg")
+        if (cachedFile.exists() && cachedFile.length() > 0L) {
+            cachedFile.setLastModified(System.currentTimeMillis())
+            return@withContext Uri.fromFile(cachedFile).toString()
+        }
+        val retriever = MediaMetadataRetriever()
+        return@withContext try {
+            retriever.setDataSource(context, Uri.parse(track.contentUri))
+            saveEmbeddedArtBytes(track.id, retriever.embeddedPicture)
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    suspend fun clearArtworkCache(): Long = withContext(Dispatchers.IO) {
+        val removed = ArtDiskCacheManager.clearDirectory(artCacheDir())
+        ArtworkColorExtractor.clearMemoryCache()
+        refreshArtCacheSize()
+        removed
+    }
+
+    suspend fun getOrExtractWaveform(track: AudioTrack): WaveformData = withContext(Dispatchers.IO) {
+        val signature = "${track.sizeBytes}_${track.durationMs}"
+        val cached = dao.getWaveformPeak(track.id)
+        if (cached != null && cached.fileSignature == signature) {
+            val decoded = WaveformExtractor.decodePeaksCsv(cached.peaksCsv)
+            if (decoded.isNotEmpty()) {
+                return@withContext WaveformData(
+                    trackId = track.id,
+                    amplitudes = decoded,
+                    isRealPcm = true,
+                    suggestedGainDb = cached.suggestedGainDb
+                )
+            }
+        }
+
+        val extracted = WaveformExtractor.extractFromAudioUri(
+            context = context,
+            uri = Uri.parse(track.contentUri),
+            durationMs = track.durationMs
+        )
+        if (extracted != null && extracted.amplitudes.isNotEmpty()) {
+            dao.upsertWaveformPeak(
+                WaveformPeakEntity(
+                    trackId = track.id,
+                    fileSignature = signature,
+                    peaksCsv = WaveformExtractor.encodePeaksCsv(extracted.amplitudes),
+                    suggestedGainDb = extracted.suggestedGainDb
+                )
+            )
+            WaveformData(
+                trackId = track.id,
+                amplitudes = extracted.amplitudes,
+                isRealPcm = true,
+                suggestedGainDb = extracted.suggestedGainDb
+            )
+        } else {
+            WaveformData(
+                trackId = track.id,
+                amplitudes = WaveformExtractor.fallbackAmplitudes(track.id),
+                isRealPcm = false,
+                suggestedGainDb = 0f
+            )
+        }
+    }
+
+    suspend fun getTrackNormalizationGainDb(trackId: String): Float = withContext(Dispatchers.IO) {
+        dao.getWaveformPeak(trackId)?.suggestedGainDb ?: 0f
     }
 
     suspend fun toggleFavorite(trackId: String, currentlyFavorite: Boolean) {
@@ -413,5 +567,143 @@ class MusicLibraryRepository(
 
     suspend fun removeTrackFromPlaylist(playlistId: Long, trackId: String) {
         dao.removeTrackFromPlaylist(playlistId, trackId)
+    }
+
+    suspend fun reorderPlaylistTracks(playlistId: Long, orderedTrackIds: List<String>) {
+        orderedTrackIds.forEachIndexed { index, trackId ->
+            dao.updatePlaylistTrackPosition(playlistId, trackId, index)
+        }
+    }
+
+    suspend fun exportPlaylistToM3u(
+        targetUri: Uri,
+        playlistName: String,
+        tracks: List<AudioTrack>
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val content = M3uPlaylistCodec.encode(playlistName, tracks)
+            context.contentResolver.openOutputStream(targetUri)?.bufferedWriter()?.use { writer ->
+                writer.write(content)
+            } ?: error("Unable to open destination file for export.")
+            tracks.size
+        }
+    }
+
+    suspend fun importPlaylistFromM3u(
+        sourceUri: Uri,
+        fallbackName: String
+    ): Result<M3uImportOutcome> = withContext(Dispatchers.IO) {
+        runCatching {
+            val raw = context.contentResolver.openInputStream(sourceUri)?.bufferedReader()?.use { it.readText() }
+                ?.takeIf { it.isNotBlank() }
+                ?: error("Selected M3U playlist is empty or unreadable.")
+            val document = M3uPlaylistCodec.parse(raw)
+            val currentLibrary = allTracks.first()
+            val match = M3uPlaylistCodec.matchDocument(document, currentLibrary)
+            if (match.matchedTrackIds.isEmpty()) {
+                return@runCatching M3uImportOutcome(
+                    playlistId = null,
+                    playlistName = document.playlistName ?: fallbackName,
+                    matchedCount = 0,
+                    skippedCount = match.skippedCount
+                )
+            }
+
+            val baseName = (document.playlistName ?: fallbackName).trim().ifBlank { "Imported M3U" }
+            val existingNames = playlists.first().map { it.name.trim().lowercase() }.toSet()
+            var candidateName = baseName
+            var suffix = 2
+            while (existingNames.contains(candidateName.lowercase())) {
+                candidateName = "$baseName ($suffix)"
+                suffix++
+            }
+            val newId = createPlaylist(candidateName)
+            addTracksToPlaylist(newId, match.matchedTrackIds)
+            M3uImportOutcome(
+                playlistId = newId,
+                playlistName = candidateName,
+                matchedCount = match.matchedTrackIds.size,
+                skippedCount = match.skippedCount
+            )
+        }
+    }
+
+    suspend fun saveTrackMetadataOverride(
+        trackId: String,
+        title: String,
+        artist: String,
+        album: String
+    ) {
+        dao.upsertMetadataOverride(
+            TrackMetadataOverrideEntity(
+                trackId = trackId,
+                title = title.trim(),
+                artist = artist.trim(),
+                album = album.trim()
+            )
+        )
+    }
+
+    suspend fun clearTrackMetadataOverride(trackId: String) {
+        dao.deleteMetadataOverride(trackId)
+    }
+
+    suspend fun saveCustomEqPreset(
+        name: String,
+        bandLevelsMb: List<Int>,
+        bassBoostStrength: Int,
+        virtualizerStrength: Int
+    ) {
+        dao.upsertCustomEqPreset(
+            CustomEqPresetEntity(
+                name = name.trim(),
+                bandLevelsCsv = Json.encodeToString(bandLevelsMb),
+                bassBoostStrength = bassBoostStrength.coerceIn(0, 1000),
+                virtualizerStrength = virtualizerStrength.coerceIn(0, 1000)
+            )
+        )
+    }
+
+    suspend fun deleteCustomEqPreset(name: String) {
+        dao.deleteCustomEqPreset(name)
+    }
+
+    fun observeTrackLyrics(trackId: String): Flow<TrackLyrics?> {
+        return dao.observeLyricsForTrack(trackId).map { entity ->
+            entity?.let {
+                LyricsParser.parse(
+                    rawText = it.rawLyrics,
+                    trackId = it.trackId,
+                    sourceLabel = it.sourceLabel
+                )
+            }
+        }
+    }
+
+    suspend fun importLyricsFile(trackId: String, uri: Uri): Result<TrackLyrics> = withContext(Dispatchers.IO) {
+        runCatching {
+            val raw = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                ?.takeIf { it.isNotBlank() }
+                ?: error("Selected lyrics file is empty or unreadable.")
+            val parsed = LyricsParser.parse(raw, trackId, "Imported .lrc")
+            dao.upsertLyrics(
+                TrackLyricsEntity(
+                    trackId = trackId,
+                    rawLyrics = raw,
+                    sourceLabel = if (parsed.isSynced) "Synced .lrc" else "Text File"
+                )
+            )
+            parsed
+        }
+    }
+
+    suspend fun loadEmbeddedLyricsIfAvailable(track: AudioTrack): TrackLyrics? = withContext(Dispatchers.IO) {
+        val raw = LyricsParser.extractEmbeddedId3Lyrics(context, Uri.parse(track.contentUri))
+            ?: return@withContext null
+        LyricsParser.parse(raw, track.id, "Embedded ID3")
+    }
+
+    suspend fun clearTrackLyrics(trackId: String) {
+        dao.deleteLyrics(trackId)
     }
 }

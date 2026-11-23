@@ -16,13 +16,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -238,7 +238,7 @@ private fun SheetActionItem(
 
 @Composable
 fun AddToPlaylistDialog(
-    track: AudioTrack,
+    subtitleLabel: String,
     playlists: List<PlaylistInfo>,
     isDuplicateName: (String) -> Boolean,
     onDismiss: () -> Unit,
@@ -259,7 +259,7 @@ fun AddToPlaylistDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = track.title,
+                    text = subtitleLabel,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -286,7 +286,7 @@ fun AddToPlaylistDialog(
                                 },
                                 leadingContent = {
                                     Icon(
-                                        Icons.Filled.PlaylistPlay,
+                                        Icons.AutoMirrored.Filled.PlaylistPlay,
                                         contentDescription = null,
                                         tint = MaterialTheme.colorScheme.primary
                                     )
@@ -448,29 +448,125 @@ fun MultiTrackPickerDialog(
 @Composable
 fun TrackDetailsDialog(
     track: AudioTrack,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onSaveMetadataOverride: ((title: String, artist: String, album: String) -> Unit)? = null,
+    onResetMetadataOverride: (() -> Unit)? = null
 ) {
+    var isEditing by remember(track.id) { mutableStateOf(false) }
+    var editTitle by remember(track.id, track.title) { mutableStateOf(track.title) }
+    var editArtist by remember(track.id, track.artist) { mutableStateOf(track.artist) }
+    var editAlbum by remember(track.id, track.album) { mutableStateOf(track.album) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surface,
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurface,
-        title = { Text(stringResource(R.string.action_track_info)) },
+        title = {
+            Text(
+                if (isEditing) stringResource(R.string.action_edit_tags)
+                else stringResource(R.string.action_track_info)
+            )
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                DetailRow("Title", track.title)
-                DetailRow("Artist", track.artist)
-                DetailRow("Album", track.album)
-                DetailRow("Folder", track.folderName)
-                DetailRow("Duration", formatDurationMs(track.durationMs))
-                DetailRow("Format", track.formatLabel)
-                DetailRow("Size", formatFileSize(track.sizeBytes))
-                DetailRow("Plays", track.playCount.toString())
+            if (isEditing) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = editTitle,
+                        onValueChange = { editTitle = it },
+                        label = { Text("Title") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("edit_tag_title_input")
+                    )
+                    OutlinedTextField(
+                        value = editArtist,
+                        onValueChange = { editArtist = it },
+                        label = { Text("Artist") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("edit_tag_artist_input")
+                    )
+                    OutlinedTextField(
+                        value = editAlbum,
+                        onValueChange = { editAlbum = it },
+                        label = { Text("Album") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("edit_tag_album_input")
+                    )
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DetailRow("Title", track.title)
+                    DetailRow("Artist", track.artist)
+                    DetailRow("Album", track.album)
+                    DetailRow("Folder", track.folderName)
+                    DetailRow("Duration", formatDurationMs(track.durationMs))
+                    DetailRow("Format", track.formatLabel)
+                    DetailRow("Size", formatFileSize(track.sizeBytes))
+                    DetailRow("Plays", track.playCount.toString())
+                    if (track.isMetadataOverridden) {
+                        Text(
+                            text = "Custom local tag override active",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Done")
+            if (isEditing) {
+                TextButton(
+                    enabled = editTitle.trim().isNotEmpty(),
+                    onClick = {
+                        onSaveMetadataOverride?.invoke(editTitle.trim(), editArtist.trim(), editAlbum.trim())
+                        onDismiss()
+                    },
+                    modifier = Modifier.testTag("track_details_save_tags_button")
+                ) {
+                    Text(stringResource(R.string.action_save))
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (track.isMetadataOverridden && onResetMetadataOverride != null) {
+                        TextButton(
+                            onClick = {
+                                onResetMetadataOverride()
+                                onDismiss()
+                            },
+                            modifier = Modifier.testTag("track_details_reset_tags_button")
+                        ) {
+                            Text(
+                                text = stringResource(R.string.action_reset_tags),
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                    if (onSaveMetadataOverride != null) {
+                        TextButton(
+                            onClick = { isEditing = true },
+                            modifier = Modifier.testTag("track_details_edit_tags_button")
+                        ) {
+                            Text(stringResource(R.string.action_edit_tags))
+                        }
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text("Done")
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            if (isEditing) {
+                TextButton(onClick = { isEditing = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             }
         }
     )

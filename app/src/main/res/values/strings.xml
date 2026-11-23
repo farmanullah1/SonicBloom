@@ -30,6 +30,11 @@
     <string name="action_add_to_playlist">Add to Playlist</string>
     <string name="action_remove_from_playlist">Remove from Playlist</string>
     <string name="action_track_info">Audio Details</string>
+    <string name="action_export_m3u">Export .m3u</string>
+    <string name="action_import_m3u">Import .m3u</string>
+    <string name="action_edit_tags">Edit Tags</string>
+    <string name="action_reset_tags">Reset Tags</string>
+    <string name="action_clear_cache">Clear Cache</string>
 
     <string name="home_hero_eyebrow">STUDIO AUDIO ENGINE</string>
     <string name="home_hero_title">Your local library, in full bloom.</string>
@@ -69,13 +74,33 @@
     <string name="playlist_liked_songs">Liked Songs</string>
     <string name="playlist_most_played">Most Played</string>
     <string name="playlist_recently_added">Recently Added</string>
+    <string name="playlist_lossless_vault">Lossless Studio Vault</string>
+    <string name="playlist_unplayed_gems">Unplayed Gems</string>
     <string name="playlist_name_hint">Playlist name</string>
     <string name="playlist_track_count">%1$d tracks</string>
 
     <string name="now_playing_label">NOW PLAYING</string>
     <string name="up_next_label">Up Next</string>
+    <string name="lyrics_label">Lyrics</string>
+    <string name="lyrics_import_lrc">Import .lrc File</string>
+    <string name="lyrics_empty_title">No lyrics attached yet</string>
+    <string name="lyrics_empty_subtitle">Embedded ID3 lyrics appear automatically, or import a synced .lrc file for this track.</string>
+    <string name="action_select_tracks">Select</string>
+    <string name="action_select_all">All</string>
+    <string name="action_swipe_queue">Queue Next</string>
+    <string name="action_swipe_like">Like</string>
+    <string name="action_swipe_remove">Remove</string>
+    <string name="ab_loop_idle">A–B Loop</string>
+    <string name="ab_loop_set_b">Tap for B</string>
+
+    <string name="widget_description">Quick SonicBloom playback controls and track artwork.</string>
+    <string name="widget_empty_title">SonicBloom</string>
+    <string name="widget_empty_subtitle">Tap to open your local library</string>
+
     <string name="equalizer_title">Studio Equalizer</string>
     <string name="equalizer_bass_boost">Bass Boost</string>
+    <string name="equalizer_virtualizer">Spatial Virtualizer</string>
+    <string name="equalizer_save_preset">Save Preset</string>
     <string name="equalizer_unavailable">Hardware equalizer bands become available once an audio track begins playing on this device.</string>
     <string name="sleep_timer_title">Sleep Timer</string>
     <string name="sleep_timer_off">Turn Off Timer</string>
@@ -87,6 +112,12 @@
     <string name="theme_system">System</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
+    <string name="settings_audio_engine">Audio Engine</string>
+    <string name="settings_crossfade">Crossfade</string>
+    <string name="settings_normalization">Volume Normalization</string>
+    <string name="settings_library_filters">Library Filters</string>
+    <string name="settings_min_duration">Minimum Track Length</string>
+    <string name="settings_excluded_folders">Excluded Folders</string>
 
     <string name="cd_play_pause">Play or pause</string>
     <string name="cd_previous_track">Previous track</string>
@@ -100,6 +131,7 @@
     <string name="cd_back">Navigate back</string>
     <string name="cd_more_options">More track options</string>
     <string name="cd_queue">Open playback queue</string>
+    <string name="cd_lyrics">Toggle lyrics view</string>
     <string name="cd_equalizer">Open equalizer</string>
     <string name="cd_sleep_timer">Open sleep timer</string>
     <string name="cd_theme_toggle">Switch theme appearance</string>

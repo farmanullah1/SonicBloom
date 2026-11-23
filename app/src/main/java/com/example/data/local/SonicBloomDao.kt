@@ -47,6 +47,9 @@ interface SonicBloomDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertPlaylistTrack(crossRef: PlaylistTrackCrossRef)
 
+    @Query("UPDATE playlist_tracks SET position = :position WHERE playlistId = :playlistId AND trackId = :trackId")
+    suspend fun updatePlaylistTrackPosition(playlistId: Long, trackId: String, position: Int)
+
     @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId AND trackId = :trackId")
     suspend fun removeTrackFromPlaylist(playlistId: Long, trackId: String)
 
@@ -58,4 +61,40 @@ interface SonicBloomDao {
 
     @Query("DELETE FROM imported_tracks WHERE id = :trackId")
     suspend fun deleteImportedTrack(trackId: String)
+
+    @Query("SELECT * FROM track_lyrics WHERE trackId = :trackId LIMIT 1")
+    fun observeLyricsForTrack(trackId: String): Flow<TrackLyricsEntity?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertLyrics(entity: TrackLyricsEntity)
+
+    @Query("DELETE FROM track_lyrics WHERE trackId = :trackId")
+    suspend fun deleteLyrics(trackId: String)
+
+    @Query("SELECT * FROM track_metadata_overrides")
+    fun observeMetadataOverrides(): Flow<List<TrackMetadataOverrideEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertMetadataOverride(entity: TrackMetadataOverrideEntity)
+
+    @Query("DELETE FROM track_metadata_overrides WHERE trackId = :trackId")
+    suspend fun deleteMetadataOverride(trackId: String)
+
+    @Query("SELECT * FROM custom_eq_presets ORDER BY createdAt ASC")
+    fun observeCustomEqPresets(): Flow<List<CustomEqPresetEntity>>
+
+    @Query("SELECT * FROM custom_eq_presets WHERE name = :name LIMIT 1")
+    suspend fun getCustomEqPreset(name: String): CustomEqPresetEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCustomEqPreset(entity: CustomEqPresetEntity)
+
+    @Query("DELETE FROM custom_eq_presets WHERE name = :name")
+    suspend fun deleteCustomEqPreset(name: String)
+
+    @Query("SELECT * FROM waveform_peaks WHERE trackId = :trackId LIMIT 1")
+    suspend fun getWaveformPeak(trackId: String): WaveformPeakEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertWaveformPeak(entity: WaveformPeakEntity)
 }

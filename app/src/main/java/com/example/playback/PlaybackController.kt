@@ -16,6 +16,7 @@ import com.example.data.model.AudioTrack
 import com.example.data.model.RepeatModeOption
 import com.example.data.model.SleepTimerState
 import com.example.data.repository.MusicLibraryRepository
+import com.example.widget.SonicBloomWidgetProvider
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,9 +40,50 @@ data class PlaybackUiState(
     val repeatMode: RepeatModeOption = RepeatModeOption.OFF,
     val playbackSpeed: Float = 1.0f,
     val sleepTimer: SleepTimerState = SleepTimerState(),
+    val loopStartMs: Long? = null,
+    val loopEndMs: Long? = null,
     val isReady: Boolean = false,
     val errorMessage: String? = null
-)
+) {
+    val isAbLoopActive: Boolean
+        get() = loopStartMs != null && loopEndMs != null && loopEndMs > loopStartMs
+}
+
+object AbLoopCoordinator {
+    const val MIN_SPAN_MS = 500L
+
+    fun nextLoopBounds(
+        currentStartMs: Long?,
+        currentEndMs: Long?,
+        cursorMs: Long,
+        durationMs: Long
+    ): Pair<Long?, Long?> {
+        val safeDur = durationMs.coerceAtLeast(1L)
+        val clampedCursor = cursorMs.coerceIn(0L, safeDur)
+        return when {
+            currentStartMs == null -> clampedCursor to null
+            currentEndMs == null -> {
+                if (kotlin.math.abs(clampedCursor - currentStartMs) < MIN_SPAN_MS) {
+                    currentStartMs to null
+                } else if (clampedCursor < currentStartMs) {
+                    clampedCursor to currentStartMs
+                } else {
+                    currentStartMs to clampedCursor
+                }
+            }
+            else -> null to null
+        }
+    }
+
+    fun shouldWrapToLoopStart(
+        positionMs: Long,
+        loopStartMs: Long?,
+        loopEndMs: Long?
+    ): Boolean {
+        if (loopStartMs == null || loopEndMs == null || loopEndMs <= loopStartMs) return false
+        return positionMs >= loopEndMs
+    }
+}
 
 class PlaybackController(
     private val context: Context,
@@ -62,10 +104,15 @@ class PlaybackController(
 
     private var trackLookupById: Map<String, AudioTrack> = emptyMap()
     private var lastRecordedTrackId: String? = null
+    private var lastActiveMediaId: String? = null
+    private var resolvedArtByTrackId = mutableMapOf<String, String?>()
+    private var lastSessionSaveElapsedMs = 0L
+    private var hasAttemptedSessionRestore = false
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             syncFromPlayer()
+            persistSessionSnapshot(force = true)
             if (isPlaying) startPositionTicker() else stopPositionTicker()
         }
 
@@ -98,9 +145,20 @@ class PlaybackController(
                 controller?.pause()
                 cancelSleepTimer()
             }
-            _uiState.value = _uiState.value.copy(errorMessage = null)
+            val newId = mediaItem?.mediaId
+            if (newId != lastActiveMediaId) {
+                lastActiveMediaId = newId
+                _uiState.value = _uiState.value.copy(
+                    loopStartMs = null,
+                    loopEndMs = null,
+                    errorMessage = null
+                )
+            } else {
+                _uiState.value = _uiState.value.copy(errorMessage = null)
+            }
             syncFromPlayer()
             recordCurrentTrackPlay()
+            persistSessionSnapshot(force = true)
         }
 
         override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
@@ -126,13 +184,24 @@ class PlaybackController(
             libraryRepository.allTracks.collect { tracks ->
                 trackLookupById = tracks.associateBy { it.id }
                 val updatedQueue = _uiState.value.queue.map { old ->
-                    trackLookupById[old.id] ?: old
+                    val merged = trackLookupById[old.id] ?: old
+                    if (merged.albumArtUri == null && resolvedArtByTrackId[merged.id] != null) {
+                        merged.copy(albumArtUri = resolvedArtByTrackId[merged.id])
+                    } else merged
                 }
-                val current = _uiState.value.currentTrack?.let { trackLookupById[it.id] ?: it }
+                val current = _uiState.value.currentTrack?.let { cur ->
+                    val merged = trackLookupById[cur.id] ?: cur
+                    if (merged.albumArtUri == null && resolvedArtByTrackId[merged.id] != null) {
+                        merged.copy(albumArtUri = resolvedArtByTrackId[merged.id])
+                    } else merged
+                }
                 _uiState.value = _uiState.value.copy(
                     queue = updatedQueue,
                     currentTrack = current
                 )
+                if (tracks.isNotEmpty() && _uiState.value.queue.isEmpty() && !hasAttemptedSessionRestore) {
+                    restoreSavedSessionIfIdle()
+                }
             }
         }
     }
@@ -170,7 +239,13 @@ class PlaybackController(
                         pendingPlayRequest?.let { (tracks, startIdx) ->
                             pendingPlayRequest = null
                             playTracks(tracks, startIdx)
-                        } ?: syncFromPlayer()
+                        } ?: run {
+                            if (mediaController.mediaItemCount > 0) {
+                                syncFromPlayer()
+                            } else {
+                                restoreSavedSessionIfIdle()
+                            }
+                        }
                         if (mediaController.isPlaying) {
                             startPositionTicker()
                         }
@@ -191,6 +266,38 @@ class PlaybackController(
         _uiState.value = _uiState.value.copy(errorMessage = null)
     }
 
+    fun onAbLoopClick(): String? {
+        val state = _uiState.value
+        val curPos = controller?.currentPosition?.coerceAtLeast(0L) ?: state.positionMs
+        val dur = state.durationMs.takeIf { it > 0L } ?: state.currentTrack?.durationMs ?: 0L
+        if (dur <= AbLoopCoordinator.MIN_SPAN_MS) return null
+
+        val wasWaitingB = state.loopStartMs != null && state.loopEndMs == null
+        val (nextA, nextB) = AbLoopCoordinator.nextLoopBounds(
+            currentStartMs = state.loopStartMs,
+            currentEndMs = state.loopEndMs,
+            cursorMs = curPos,
+            durationMs = dur
+        )
+
+        if (wasWaitingB && nextB == null) {
+            return "Move at least 0.5s away from point A before setting point B."
+        }
+
+        _uiState.value = state.copy(loopStartMs = nextA, loopEndMs = nextB)
+        if (nextA != null && nextB != null) {
+            seekTo(nextA)
+            if (controller?.isPlaying == true) {
+                startPositionTicker()
+            }
+        }
+        return null
+    }
+
+    fun clearAbLoop() {
+        _uiState.value = _uiState.value.copy(loopStartMs = null, loopEndMs = null)
+    }
+
     fun playTracks(tracks: List<AudioTrack>, startIndex: Int = 0) {
         if (tracks.isEmpty()) return
         val player = controller
@@ -201,11 +308,14 @@ class PlaybackController(
         }
         val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
         val mediaItems = tracks.map { it.toMediaItem() }
+        lastActiveMediaId = tracks[safeIndex].id
 
         _uiState.value = _uiState.value.copy(
             queue = tracks,
             currentIndex = safeIndex,
             currentTrack = tracks[safeIndex],
+            loopStartMs = null,
+            loopEndMs = null,
             errorMessage = null
         )
 
@@ -213,6 +323,8 @@ class PlaybackController(
         player.prepare()
         player.play()
         recordCurrentTrackPlay(tracks[safeIndex])
+        resolveMissingArtworkForCurrent(tracks[safeIndex])
+        persistSessionSnapshot(force = true)
     }
 
     fun togglePlayPause() {
@@ -237,6 +349,7 @@ class PlaybackController(
         val clamped = positionMs.coerceIn(0L, maxDur)
         player.seekTo(clamped)
         _uiState.value = _uiState.value.copy(positionMs = clamped)
+        persistSessionSnapshot(force = true)
     }
 
     fun seekRelative(deltaMs: Long) {
@@ -246,7 +359,7 @@ class PlaybackController(
 
     fun skipNext() {
         val player = controller ?: return
-        _uiState.value = _uiState.value.copy(errorMessage = null)
+        _uiState.value = _uiState.value.copy(errorMessage = null, loopStartMs = null, loopEndMs = null)
         if (player.hasNextMediaItem()) {
             player.seekToNextMediaItem()
             player.prepare()
@@ -264,6 +377,7 @@ class PlaybackController(
         if (player.currentPosition > 4000L) {
             player.seekTo(0L)
         } else if (player.hasPreviousMediaItem()) {
+            _uiState.value = _uiState.value.copy(loopStartMs = null, loopEndMs = null)
             player.seekToPreviousMediaItem()
         } else {
             player.seekTo(0L)
@@ -315,6 +429,23 @@ class PlaybackController(
         val currentQueue = _uiState.value.queue.toMutableList()
         currentQueue.add(insertIndex.coerceAtMost(currentQueue.size), track)
         _uiState.value = _uiState.value.copy(queue = currentQueue)
+        persistSessionSnapshot(force = true)
+    }
+
+    fun playNextBatch(tracks: List<AudioTrack>) {
+        if (tracks.isEmpty()) return
+        val player = controller ?: run {
+            playTracks(tracks, 0)
+            return
+        }
+        if (player.mediaItemCount == 0) {
+            playTracks(tracks, 0)
+            return
+        }
+        val insertIndex = (player.currentMediaItemIndex + 1).coerceAtMost(player.mediaItemCount)
+        player.addMediaItems(insertIndex, tracks.map { it.toMediaItem() })
+        syncFromPlayer()
+        persistSessionSnapshot(force = true)
     }
 
     fun addToQueue(track: AudioTrack) {
@@ -328,12 +459,28 @@ class PlaybackController(
         }
         player.addMediaItem(track.toMediaItem())
         _uiState.value = _uiState.value.copy(queue = _uiState.value.queue + track)
+        persistSessionSnapshot(force = true)
+    }
+
+    fun addTracksToQueue(tracks: List<AudioTrack>) {
+        if (tracks.isEmpty()) return
+        val player = controller ?: run {
+            playTracks(tracks, 0)
+            return
+        }
+        if (player.mediaItemCount == 0) {
+            playTracks(tracks, 0)
+            return
+        }
+        player.addMediaItems(tracks.map { it.toMediaItem() })
+        syncFromPlayer()
+        persistSessionSnapshot(force = true)
     }
 
     fun jumpToQueueIndex(index: Int) {
         val player = controller ?: return
         if (index in 0 until player.mediaItemCount) {
-            _uiState.value = _uiState.value.copy(errorMessage = null)
+            _uiState.value = _uiState.value.copy(errorMessage = null, loopStartMs = null, loopEndMs = null)
             player.seekTo(index, 0L)
             player.prepare()
             player.play()
@@ -346,6 +493,7 @@ class PlaybackController(
         if (fromIndex !in 0 until player.mediaItemCount || toIndex !in 0 until player.mediaItemCount) return
         player.moveMediaItem(fromIndex, toIndex)
         syncFromPlayer()
+        persistSessionSnapshot(force = true)
     }
 
     fun removeFromQueue(index: Int) {
@@ -358,6 +506,7 @@ class PlaybackController(
                 _uiState.value = _uiState.value.copy(queue = updated)
             }
             syncFromPlayer()
+            persistSessionSnapshot(force = true)
         }
     }
 
@@ -366,6 +515,7 @@ class PlaybackController(
         player.stop()
         player.clearMediaItems()
         stopPositionTicker()
+        lastActiveMediaId = null
         _uiState.value = _uiState.value.copy(
             queue = emptyList(),
             currentIndex = -1,
@@ -373,8 +523,11 @@ class PlaybackController(
             isPlaying = false,
             positionMs = 0L,
             durationMs = 0L,
+            loopStartMs = null,
+            loopEndMs = null,
             errorMessage = null
         )
+        persistSessionSnapshot(force = true)
     }
 
     fun startSleepTimerMinutes(minutes: Int) {
@@ -419,12 +572,21 @@ class PlaybackController(
                     val dur = player.duration.takeIf { it > 0L }
                         ?: _uiState.value.currentTrack?.durationMs
                         ?: 0L
+                    var pos = player.currentPosition.coerceAtLeast(0L)
+                    val startMs = _uiState.value.loopStartMs
+                    val endMs = _uiState.value.loopEndMs
+                    if (AbLoopCoordinator.shouldWrapToLoopStart(pos, startMs, endMs) && startMs != null) {
+                        player.seekTo(startMs)
+                        pos = startMs
+                    }
                     _uiState.value = _uiState.value.copy(
-                        positionMs = player.currentPosition.coerceAtLeast(0L),
+                        positionMs = pos,
                         durationMs = dur
                     )
+                    persistSessionSnapshot(force = false)
                 }
-                delay(250L)
+                val intervalMs = if (_uiState.value.isAbLoopActive) 120L else 250L
+                delay(intervalMs)
             }
         }
     }
@@ -434,6 +596,48 @@ class PlaybackController(
         positionTickerJob = null
     }
 
+    fun restoreSavedSessionIfIdle() {
+        val player = controller ?: return
+        if (player.mediaItemCount > 0 || pendingPlayRequest != null) return
+        scope.launch {
+            val snapshot = preferencesRepository.getSavedPlaybackSession()
+            if (snapshot.queueTrackIds.isEmpty()) return@launch
+            val availableTracks = libraryRepository.allTracks.first()
+            if (availableTracks.isEmpty()) return@launch
+            hasAttemptedSessionRestore = true
+            val byId = availableTracks.associateBy { it.id }
+            val restoredQueue = snapshot.queueTrackIds.mapNotNull { byId[it] }
+            if (restoredQueue.isEmpty()) return@launch
+
+            val safeIndex = snapshot.currentIndex.coerceIn(0, restoredQueue.lastIndex)
+            val currentTrack = restoredQueue[safeIndex]
+            val clampedPos = snapshot.positionMs.coerceIn(0L, currentTrack.durationMs.coerceAtLeast(0L))
+            lastActiveMediaId = currentTrack.id
+
+            player.setMediaItems(restoredQueue.map { it.toMediaItem() }, safeIndex, clampedPos)
+            player.prepare()
+            _uiState.value = _uiState.value.copy(
+                queue = restoredQueue,
+                currentIndex = safeIndex,
+                currentTrack = currentTrack,
+                isPlaying = false,
+                positionMs = clampedPos,
+                durationMs = currentTrack.durationMs,
+                loopStartMs = null,
+                loopEndMs = null,
+                errorMessage = null
+            )
+            resolveMissingArtworkForCurrent(currentTrack)
+            SonicBloomWidgetProvider.updateWidgets(
+                context = context,
+                title = currentTrack.title,
+                artist = currentTrack.artist,
+                artUri = currentTrack.albumArtUri,
+                isPlaying = false
+            )
+        }
+    }
+
     private fun syncFromPlayer() {
         val player = controller ?: return
         val index = player.currentMediaItemIndex
@@ -441,13 +645,19 @@ class PlaybackController(
         val resolvedQueue = if (player.mediaItemCount > 0) {
             (0 until player.mediaItemCount).mapNotNull { i ->
                 val item = player.getMediaItemAt(i)
-                trackLookupById[item.mediaId] ?: _uiState.value.queue.find { it.id == item.mediaId }
+                val base = trackLookupById[item.mediaId] ?: _uiState.value.queue.find { it.id == item.mediaId }
+                if (base != null && base.albumArtUri == null && resolvedArtByTrackId[base.id] != null) {
+                    base.copy(albumArtUri = resolvedArtByTrackId[base.id])
+                } else base
             }
         } else {
             emptyList()
         }
         val currentTrack = mediaItem?.let { item ->
-            trackLookupById[item.mediaId] ?: resolvedQueue.find { it.id == item.mediaId }
+            val base = trackLookupById[item.mediaId] ?: resolvedQueue.find { it.id == item.mediaId }
+            if (base != null && base.albumArtUri == null && resolvedArtByTrackId[base.id] != null) {
+                base.copy(albumArtUri = resolvedArtByTrackId[base.id])
+            } else base
         }
         val dur = player.duration.takeIf { it > 0L } ?: currentTrack?.durationMs ?: 0L
 
@@ -459,6 +669,69 @@ class PlaybackController(
             positionMs = player.currentPosition.coerceAtLeast(0L),
             durationMs = dur
         )
+        if (currentTrack != null) {
+            resolveMissingArtworkForCurrent(currentTrack)
+        }
+        SonicBloomWidgetProvider.updateWidgets(
+            context = context,
+            title = currentTrack?.title,
+            artist = currentTrack?.artist,
+            artUri = currentTrack?.albumArtUri,
+            isPlaying = player.isPlaying
+        )
+    }
+
+    private fun resolveMissingArtworkForCurrent(track: AudioTrack) {
+        if (track.albumArtUri != null || resolvedArtByTrackId.containsKey(track.id)) return
+        scope.launch {
+            val resolved = libraryRepository.resolveEmbeddedArtworkIfMissing(track)
+            resolvedArtByTrackId[track.id] = resolved
+            if (resolved != null) {
+                val updatedQueue = _uiState.value.queue.map {
+                    if (it.id == track.id && it.albumArtUri == null) it.copy(albumArtUri = resolved) else it
+                }
+                val current = _uiState.value.currentTrack
+                val updatedCurrent = if (current?.id == track.id && current.albumArtUri == null) {
+                    current.copy(albumArtUri = resolved)
+                } else current
+                _uiState.value = _uiState.value.copy(
+                    queue = updatedQueue,
+                    currentTrack = updatedCurrent
+                )
+                if (updatedCurrent?.id == track.id) {
+                    SonicBloomWidgetProvider.updateWidgets(
+                        context = context,
+                        title = updatedCurrent.title,
+                        artist = updatedCurrent.artist,
+                        artUri = resolved,
+                        isPlaying = _uiState.value.isPlaying
+                    )
+                }
+            }
+        }
+    }
+
+    private fun persistSessionSnapshot(force: Boolean) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastSessionSaveElapsedMs < 4000L) return
+        lastSessionSaveElapsedMs = now
+
+        val state = _uiState.value
+        val ids = state.queue.map { it.id }
+        val idx = state.currentIndex.coerceAtLeast(0)
+        val pos = controller?.currentPosition?.coerceAtLeast(0L) ?: state.positionMs
+        val cur = state.currentTrack
+        scope.launch {
+            preferencesRepository.savePlaybackSession(
+                queueTrackIds = ids,
+                currentIndex = idx,
+                positionMs = pos,
+                lastTrackTitle = cur?.title.orEmpty(),
+                lastTrackArtist = cur?.artist.orEmpty(),
+                lastTrackArtUri = cur?.albumArtUri,
+                isPlaying = state.isPlaying
+            )
+        }
     }
 
     private fun recordCurrentTrackPlay(explicitTrack: AudioTrack? = null) {
